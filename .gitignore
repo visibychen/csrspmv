@@ -1,0 +1,4 @@
+/csrspmv
+/src/*.o
+/tests/test_spmv_plan
+/core

@@ -26,6 +26,7 @@
 #include "matrix_market.h"
 #include "program_options.h"
 #include "vector.h"
+#include "spmv_plan.h"
 
 #include <errno.h>
 #include <omp.h>
@@ -394,7 +395,31 @@ int main(int argc, char *argv[])
         }
     }
 
+    /* Empty matrices cannot meet a positive flop target. Reject instead of
+     * hanging forever, including when the original backend was requested. */
+    if (csr_matrix.num_nonzeros == 0 && args.min_flops > 0) {
+        fprintf(stderr, "%s: positive --flops requires nonzero entries\n", program_invocation_short_name);
+        vector_free(&y); vector_free(&x);
+        csr_matrix_int32_free(&csr_matrix); program_options_free(&args);
+        return EXIT_FAILURE;
+    }
+    struct spmv_plan plan;
+    struct timespec prepare_start, prepare_end;
+    clock_gettime(CLOCK_MONOTONIC, &prepare_start);
+    err = spmv_plan_prepare(&plan, &csr_matrix, &x, &y, args.kernel,
+                            args.sell_chunk, (size_t)args.sell_memory_mib*1048576);
+    clock_gettime(CLOCK_MONOTONIC, &prepare_end);
+    if (err) {
+        fprintf(stderr, "%s: prepare: %s\n", program_invocation_short_name, strerror(err));
+        spmv_plan_free(&plan);
+        vector_free(&y); vector_free(&x);
+        csr_matrix_int32_free(&csr_matrix); program_options_free(&args);
+        return EXIT_FAILURE;
+    }
     if (args.verbose > 0) {
+        fprintf(stdout, "spmv_prepare: %.9f seconds requested=%s selected=%s reason=%s chunk=%d slots=%"PRId64" extra_bytes=%zu\n",
+                timespec_duration(prepare_start,prepare_end), spmv_kernel_name(args.kernel),
+                spmv_kernel_name(plan.kernel),plan.reason,plan.chunk,plan.slots,plan.extra_bytes);
         fprintf(stdout, "csr_matrix_int32_spmv: ");
         fflush(stdout);
         clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -405,11 +430,12 @@ int main(int argc, char *argv[])
     int64_t num_flops = 0;
 #pragma omp parallel reduction(err_add:err) reduction(max:num_flops) reduction(max:repeat)
     for (repeat = 0, num_flops = 0; (repeat < args.repeat) || (num_flops < args.min_flops); repeat++) {
-        err = csr_matrix_int32_spmv(&csr_matrix, &x, &y, &num_flops);
+        err = spmv_plan_execute(&plan, &x, &y, &num_flops);
         if (err)
             break;
     }
     if (err) {
+        spmv_plan_free(&plan);
         fprintf(stderr, "%s: %s\n", program_invocation_short_name,
                 strerror(err));
         vector_free(&y);
@@ -427,6 +453,8 @@ int main(int argc, char *argv[])
                 (double) csr_matrix.num_nonzeros * 1e-9 * (double) repeat / (double) timespec_duration(t0, t1));
         fflush(stdout);
     }
+
+    spmv_plan_free(&plan);
 
     /* 6. Write the destination vector to a file. */
     if (args.destination_vector_file) {

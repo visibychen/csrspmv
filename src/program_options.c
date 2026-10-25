@@ -53,6 +53,9 @@ static int program_options_init(
     args->destination_vector_format = vector_value_f64;
     args->repeat = 1;
     args->min_flops = 0;
+    args->kernel = spmv_original;
+    args->sell_chunk = 8;
+    args->sell_memory_mib = 1024;
     args->count_nonzeros = 0;
     args->verbose = 0;
     args->help = false;
@@ -97,6 +100,9 @@ void program_options_print_help(
     fprintf(f, "  --destination-vector-prec=N\tprecision for destination vector output\n");
     fprintf(f, "  --destination-vector-format=FORMAT\tchoose one of: int32, f32, f64 or complex32.\n");
     fprintf(f, "  --flops=N\t\t\tminimum number of arithmetic operations to perform\n");
+    fprintf(f, "  --kernel=NAME\t\t\toriginal (default), csr-scalar, csr-pack, sell\n");
+    fprintf(f, "  --sell-chunk=N\t\t\t8 or 16 rows per slice (default 8)\n");
+    fprintf(f, "  --sell-memory-mib=N\t\textra allocation budget, default 1024 MiB; 0 disables SELL\n");
     fprintf(f, "  -r, --repeat=N\t\trepeat matrix-vector multiplication\n");
     fprintf(f, "  --count-nonzeros\t\tdisplay the number of nonzeros assigned to each thread and exit\n");
     fprintf(f, "  -v, --verbose\t\t\tbe more verbose\n");
@@ -151,6 +157,43 @@ int parse_program_options(
             break;
 
         /* Parse matrix format. */
+        const char *value = NULL;
+        int used = 1;
+        if (strcmp((*argv)[0], "--kernel") == 0 ||
+            strcmp((*argv)[0], "--sell-chunk") == 0 ||
+            strcmp((*argv)[0], "--sell-memory-mib") == 0) {
+            if (*argc < 2) { program_options_free(args); return EINVAL; }
+            value = (*argv)[1]; used = 2;
+        } else {
+            const char *eq = strchr((*argv)[0], '=');
+            if (eq) value = eq+1;
+        }
+        if (strcmp((*argv)[0], "--kernel") == 0 ||
+            strncmp((*argv)[0], "--kernel=", 9) == 0) {
+            if (!value) { program_options_free(args); return EINVAL; }
+            if (!strcmp(value,"original")) args->kernel = spmv_original;
+            else if (!strcmp(value,"csr-scalar")) args->kernel = spmv_csr_scalar;
+            else if (!strcmp(value,"csr-pack")) args->kernel = spmv_csr_pack;
+            else if (!strcmp(value,"sell")) args->kernel = spmv_sell;
+            else { program_options_free(args); return EINVAL; }
+            num_arguments_consumed += used; continue;
+        }
+        if (strcmp((*argv)[0], "--sell-chunk") == 0 ||
+            strncmp((*argv)[0], "--sell-chunk=", 13) == 0 ||
+            strcmp((*argv)[0], "--sell-memory-mib") == 0 ||
+            strncmp((*argv)[0], "--sell-memory-mib=", 18) == 0) {
+            int chunk = strncmp((*argv)[0],"--sell-chunk",12) == 0;
+            int32_t n;
+            const char *end = NULL;
+            err = value ? parse_int32(value,NULL,&n,&end) : EINVAL;
+            if (err || !end || *end || (chunk ? (n != 8 && n != 16) : n < 0)) {
+                program_options_free(args); return EINVAL;
+            }
+            if (chunk) args->sell_chunk = n;
+            else args->sell_memory_mib = n;
+            num_arguments_consumed += used; continue;
+        }
+
         if (strcmp((*argv)[0], "--matrix-format") == 0) {
             if (*argc < 2) {
                 program_options_free(args);
@@ -436,5 +479,9 @@ int parse_program_options(
         return EINVAL;
     }
 
+    if (args->repeat < 0 || args->min_flops < 0 ||
+        (uint64_t)args->sell_memory_mib > SIZE_MAX / 1048576) {
+        program_options_free(args); return EINVAL;
+    }
     return 0;
 }
