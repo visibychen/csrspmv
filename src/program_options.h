@@ -59,6 +59,7 @@ struct program_options
     int64_t min_flops;
     enum spmv_kernel kernel;
     struct spmv_v2_options v2;
+    struct spmv_v21_options v21;
     int plan_memory_mib;
     int count_nonzeros;
     int verbose;

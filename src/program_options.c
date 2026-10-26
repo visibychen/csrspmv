@@ -55,6 +55,7 @@ static int program_options_init(
     args->min_flops = 0;
     args->kernel = spmv_original;
     spmv_v2_defaults(&args->v2);
+    spmv_v21_defaults(&args->v21);
     args->plan_memory_mib = 4;
     args->count_nonzeros = 0;
     args->verbose = 0;
@@ -100,7 +101,14 @@ void program_options_print_help(
     fprintf(f, "  --destination-vector-prec=N\tprecision for destination vector output\n");
     fprintf(f, "  --destination-vector-format=FORMAT\tchoose one of: int32, f32, f64 or complex32.\n");
     fprintf(f, "  --flops=N\t\t\tminimum number of arithmetic operations to perform\n");
-    fprintf(f, "  --kernel=NAME\t\t\toriginal (default), v2\n");
+    fprintf(f, "  --kernel=NAME\t\t\toriginal (default), v2, v2.1\n");
+    fprintf(f, "  --v21-kernel=NAME\t\tauto, original, csr, short8, merge, long\n");
+    fprintf(f, "  --v21-profile=PATH\t\tfrozen offline cost profile (no online tuning)\n");
+    fprintf(f, "  --v21-threads=N\t\tforce compute team, within OMP maximum\n");
+    fprintf(f, "  --v21-prepare=NAME\t\tauto, serial, parallel\n");
+    fprintf(f, "  --v21-cache=0|1\t\tpartition/coordinate cache, default 1\n");
+    fprintf(f, "  --v21-fixup=NAME\t\towners (default), serial\n");
+    fprintf(f, "  --v21-diagnostics\t\tseparate instrumented thread timings\n");
     fprintf(f, "  --v2-kernel=NAME\t\tauto (default), csr, short8, merge\n");
     fprintf(f, "  --partition=NAME\t\t\tauto (default), rows, work; merge requires auto\n");
     fprintf(f, "  --execution=NAME\t\t\tauto (default), serial, parallel\n");
@@ -164,6 +172,36 @@ int parse_program_options(
         /* Parse matrix format. */
         const char *value = NULL;
         int used = 1;
+        if (!strcmp((*argv)[0],"--v21-diagnostics")) {
+            args->v21.diagnostics=1;num_arguments_consumed++;continue;
+        }
+        if (!strncmp((*argv)[0],"--v21-",6)) {
+            const char *arg=(*argv)[0],*eq=strchr(arg,'=');
+            const char *val=eq?eq+1:(*argc>1?(*argv)[1]:NULL);
+            int consumed=eq?1:2,valid=0;
+            size_t keylen=eq?(size_t)(eq-arg):strlen(arg);
+            if(!val) {program_options_free(args);return EINVAL;}
+#define V21_KEY(s) (keylen==strlen(s)&&!strncmp(arg,s,keylen))
+            if(V21_KEY("--v21-profile")) {args->v21.profile=val;valid=*val!=0;}
+            else if(V21_KEY("--v21-kernel")) {
+                const char *names[]={"auto","original","csr","short8","merge","long"};
+                for(int i=0;i<6;i++)if(!strcmp(val,names[i])) {args->v21.kernel=i;valid=1;}
+            } else if(V21_KEY("--v21-prepare")) {
+                const char *names[]={"auto","serial","parallel"};
+                for(int i=0;i<3;i++)if(!strcmp(val,names[i])) {args->v21.prepare_mode=i;valid=1;}
+            } else if(V21_KEY("--v21-fixup")) {
+                if(!strcmp(val,"owners")){args->v21.owners=1;valid=1;}
+                if(!strcmp(val,"serial")){args->v21.owners=0;valid=1;}
+            } else if(V21_KEY("--v21-cache")) {
+                if(!strcmp(val,"0")||!strcmp(val,"1")){args->v21.cache=*val-'0';valid=1;}
+            } else if(V21_KEY("--v21-threads")) {
+                int32_t n;const char *end=NULL;
+                if(!parse_int32(val,NULL,&n,&end)&&end&&!*end&&n>0) {args->v21.threads=n;valid=1;}
+            }
+#undef V21_KEY
+            if(!valid){program_options_free(args);return EINVAL;}
+            num_arguments_consumed+=consumed;continue;
+        }
         if (strcmp((*argv)[0], "--strict-order") == 0) {
             args->v2.strict_order = 1; num_arguments_consumed++; continue;
         }
@@ -185,6 +223,7 @@ int parse_program_options(
             if (!value) { program_options_free(args); return EINVAL; }
             if (!strcmp(value,"original")) args->kernel = spmv_original;
             else if (!strcmp(value,"v2")) args->kernel = spmv_v2;
+            else if (!strcmp(value,"v2.1")) args->kernel = spmv_v21;
             else { program_options_free(args); return EINVAL; }
             num_arguments_consumed += used; continue;
         }
