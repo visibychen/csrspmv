@@ -404,11 +404,24 @@ int main(int argc, char *argv[])
         csr_matrix_int32_free(&csr_matrix); program_options_free(&args);
         return EXIT_FAILURE;
     }
+    int64_t expected_calls=args.repeat;
+    if(args.kernel==spmv_v22) {
+        if(csr_matrix.num_nonzeros>INT64_MAX/2)err=EOVERFLOW;
+        else if(csr_matrix.num_nonzeros) {
+            int64_t per=2*csr_matrix.num_nonzeros;
+            int64_t calls=args.min_flops/per+(args.min_flops%per!=0);
+            if(calls>expected_calls)expected_calls=calls;
+            if(expected_calls>INT_MAX||expected_calls>INT64_MAX/per)err=EOVERFLOW;
+        }
+        if(err){fprintf(stderr,"%s: call target: %s\n",program_invocation_short_name,strerror(err));
+            vector_free(&y);vector_free(&x);csr_matrix_int32_free(&csr_matrix);program_options_free(&args);return EXIT_FAILURE;}
+    }
     struct spmv_plan plan;
     struct timespec prepare_start, prepare_end;
     clock_gettime(CLOCK_MONOTONIC, &prepare_start);
-    err = spmv_plan_prepare(&plan,&csr_matrix,&x,&y,args.kernel,&args.v2,
+    if(args.kernel==spmv_v22)err=spmv_v22_prepare(&plan,&csr_matrix,&x,&y,&args.v2,&args.v22,expected_calls,
                             (size_t)args.plan_memory_mib*1048576);
+    else err = spmv_plan_prepare(&plan,&csr_matrix,&x,&y,args.kernel,&args.v2,(size_t)args.plan_memory_mib*1048576);
     clock_gettime(CLOCK_MONOTONIC, &prepare_end);
     if (err) {
         fprintf(stderr, "%s: prepare: %s\n", program_invocation_short_name, strerror(err));
@@ -428,6 +441,7 @@ int main(int argc, char *argv[])
                 plan.v2.longest,plan.v2.all8,plan.v2.row_scan_s,
                 plan.v2.column_validation_s,plan.v2.policy_s);
         }
+        if(plan.kernel==spmv_v22)spmv_v22_report(&plan,stdout);
         fprintf(stdout, "csr_matrix_int32_spmv: ");
         fflush(stdout);
         clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -444,13 +458,17 @@ int main(int argc, char *argv[])
         if(calls<args.repeat) calls=args.repeat;
         if(calls>INT_MAX || calls>INT64_MAX/per) err=EOVERFLOW;
     }
-    if (!err && plan.kernel == spmv_v2 && plan.v2.serial) {
+    int compute_threads=plan.kernel==spmv_v22?plan.v22.threads:omp_get_max_threads();
+    if(!err&&args.kernel==spmv_v22&&expected_calls==0) {
+        /* No inspection or compute team is needed for zero calls. */
+    } else if (!err && ((plan.kernel == spmv_v2 && plan.v2.serial)||
+                       (plan.kernel==spmv_v22&&compute_threads==1))) {
         for (; (repeat < args.repeat) || (num_flops < args.min_flops); repeat++) {
             err=spmv_plan_execute(&plan,&x,&y,&num_flops);
             if(err) break;
         }
     } else if (!err) {
-#pragma omp parallel reduction(err_add:err) reduction(max:num_flops) reduction(max:repeat) reduction(max:actual_threads)
+#pragma omp parallel num_threads(compute_threads) reduction(err_add:err) reduction(max:num_flops) reduction(max:repeat) reduction(max:actual_threads)
         {
             actual_threads=omp_get_num_threads();
             for (repeat = 0, num_flops = 0; (repeat < args.repeat) || (num_flops < args.min_flops); repeat++) {

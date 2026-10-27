@@ -24,7 +24,7 @@ csrspmv = csrspmv
 
 all: $(csrspmv)
 clean:
-	rm -f $(csrspmv_c_objects) $(csrspmv) tests/test_spmv_v2
+	rm -f $(csrspmv_c_objects) $(csrspmv) tests/test_spmv_v2 tests/test_spmv_v22
 .PHONY: all clean
 
 CFLAGS += -g -Wall -iquote src
@@ -41,6 +41,7 @@ csrspmv_c_sources = \
 	src/program_options.c \
 	src/spmv_plan.c \
 	src/spmv_v2.c \
+	src/spmv_v22.c \
 	src/vector.c
 csrspmv_c_headers = \
 	src/csr.h \
@@ -49,17 +50,23 @@ csrspmv_c_headers = \
 	src/program_options.h \
 	src/spmv_plan.h \
 	src/spmv_v2.h \
+	src/spmv_v22.h \
 	src/vector.h
 csrspmv_c_objects := $(foreach x,$(csrspmv_c_sources),$(x:.c=.o))
-$(filter-out src/spmv_v2.o,$(csrspmv_c_objects)): %.o: %.c $(csrspmv_c_headers)
+$(filter-out src/spmv_v2.o src/spmv_v22.o,$(csrspmv_c_objects)): %.o: %.c $(csrspmv_c_headers)
 	$(CC) -c $(CFLAGS) $< -o $@
 $(csrspmv): $(csrspmv_c_objects)
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 src/spmv_v2.o: src/spmv_v2.c $(csrspmv_c_headers)
 	$(CC) -c $(CFLAGS) -ffp-contract=off $< -o $@
+src/spmv_v22.o: src/spmv_v22.c $(csrspmv_c_headers)
+	$(CC) -c $(CFLAGS) -ffp-contract=off $< -o $@
 tests/test_spmv_v2: tests/test_spmv_v2.c $(filter-out src/main.o src/program_options.o,$(csrspmv_c_objects))
 	$(CC) $(CFLAGS) -ffp-contract=off $^ $(LDFLAGS) -Wl,--wrap=malloc -lm -o $@
-check: tests/test_spmv_v2
+tests/test_spmv_v22: tests/test_spmv_v22.c $(filter-out src/main.o src/program_options.o,$(csrspmv_c_objects))
+	$(CC) $(CFLAGS) -ffp-contract=off $^ $(LDFLAGS) -Wl,--wrap=malloc -lm -o $@
+check: tests/test_spmv_v2 tests/test_spmv_v22
 	./tests/test_spmv_v2
+	./tests/test_spmv_v22
 .PHONY: all clean check

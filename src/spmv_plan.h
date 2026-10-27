@@ -4,8 +4,9 @@
 #include "csr.h"
 #include "vector.h"
 #include "spmv_v2.h"
+#include "spmv_v22.h"
 #include <stddef.h>
-enum spmv_kernel { spmv_original, spmv_v2 };
+enum spmv_kernel { spmv_original, spmv_v2, spmv_v22 };
 /* Borrows validated CSR: rebuild after structural mutation. Direct CSR reads
  * current values; x/y may change. Non-overlapping x/y are required.
  * prepare/free are serial; execute is collective in the current team, or
@@ -17,6 +18,7 @@ struct spmv_plan {
     const char *reason;
     size_t extra_bytes;
     struct spmv_v2_state v2;
+    struct spmv_v22_state v22;
 };
 const char *spmv_kernel_name(enum spmv_kernel);
 int spmv_plan_prepare(struct spmv_plan *,const struct csr_matrix_int32 *,
