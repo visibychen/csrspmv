@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 const char *spmv_kernel_name(enum spmv_kernel k)
-{ return k==spmv_original ? "original":k==spmv_v2 ? "v2":k==spmv_v22 ? "v2.2":"invalid"; }
+{ return k==spmv_original ? "original":k==spmv_v2 ? "v2":k==spmv_v22 ? "v2.2":k==spmv_v221 ? "v2.2.1":"invalid"; }
 void spmv_plan_free(struct spmv_plan *p)
 { free(p->v2.scratch);p->v2.scratch=NULL;free(p->v22.rows);p->v22.rows=NULL;free(p->v22.bounds);p->v22.bounds=NULL;p->extra_bytes=0; }
 int spmv_plan_prepare(struct spmv_plan *p,const struct csr_matrix_int32 *a,

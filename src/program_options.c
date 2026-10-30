@@ -56,6 +56,7 @@ static int program_options_init(
     args->kernel = spmv_original;
     spmv_v2_defaults(&args->v2);
     args->v22=(struct spmv_v22_options){1,0};
+    args->v221=(struct spmv_v221_options){1,0,0,1};
     args->plan_memory_mib = 4;
     args->count_nonzeros = 0;
     args->verbose = 0;
@@ -101,7 +102,11 @@ void program_options_print_help(
     fprintf(f, "  --destination-vector-prec=N\tprecision for destination vector output\n");
     fprintf(f, "  --destination-vector-format=FORMAT\tchoose one of: int32, f32, f64 or complex32.\n");
     fprintf(f, "  --flops=N\t\t\tminimum number of arithmetic operations to perform\n");
-    fprintf(f, "  --kernel=NAME\t\t\toriginal (default), v2, v2.2\n");
+    fprintf(f, "  --kernel=NAME\t\t\toriginal (default), v2, v2.2, v2.2.1\n");
+    fprintf(f, "  --v221-policy=NAME\t\tguarded (default), v2\n");
+    fprintf(f, "  --v221-empty=NAME\t\tauto (default), off, on\n");
+    fprintf(f, "  --v221-validation=NAME\t\tauto/serial (default serial), parallel\n");
+    fprintf(f, "  --v221-balance=NAME\t\tauto (default), rows\n");
     fprintf(f, "  --v22-policy=NAME\t\tguarded (default), v2 (delegate unchanged)\n");
     fprintf(f, "  --v22-empty=NAME\t\tauto (default), off, on\n");
     fprintf(f, "  --v2-kernel=NAME\t\tauto (default), csr, short8, merge\n");
@@ -167,6 +172,26 @@ int parse_program_options(
         /* Parse matrix format. */
         const char *value = NULL;
         int used = 1;
+        if(!strncmp((*argv)[0],"--v221-",7)) {
+            const char *arg=(*argv)[0],*eq=strchr(arg,'=');size_t len=eq?(size_t)(eq-arg):strlen(arg);
+            const char *val=eq?eq+1:(*argc>1?(*argv)[1]:NULL);int valid=0;
+            if(val&&len==13&&!strncmp(arg,"--v221-policy",13)) {
+                if(!strcmp(val,"guarded")){args->v221.guarded=1;valid=1;}
+                if(!strcmp(val,"v2")){args->v221.guarded=0;valid=1;}
+            } else if(val&&len==12&&!strncmp(arg,"--v221-empty",12)) {
+                const char *names[]={"auto","off","on"};
+                for(int i=0;i<3;i++)if(!strcmp(val,names[i])){args->v221.empty=i;valid=1;}
+            } else if(val&&len==17&&!strncmp(arg,"--v221-validation",17)) {
+                if(!strcmp(val,"auto")){args->v221.parallel_validation=0;valid=1;}
+                if(!strcmp(val,"parallel")){args->v221.parallel_validation=1;valid=1;}
+                if(!strcmp(val,"serial")){args->v221.parallel_validation=0;valid=1;}
+            } else if(val&&len==14&&!strncmp(arg,"--v221-balance",14)) {
+                if(!strcmp(val,"auto")){args->v221.balance_work=1;valid=1;}
+                if(!strcmp(val,"rows")){args->v221.balance_work=0;valid=1;}
+            }
+            if(!valid){program_options_free(args);return EINVAL;}
+            num_arguments_consumed+=eq?1:2;continue;
+        }
         if(!strncmp((*argv)[0],"--v22-",6)) {
             const char *arg=(*argv)[0],*eq=strchr(arg,'=');size_t len=eq?(size_t)(eq-arg):strlen(arg);
             const char *val=eq?eq+1:(*argc>1?(*argv)[1]:NULL);int valid=0;
@@ -202,6 +227,7 @@ int parse_program_options(
             if (!strcmp(value,"original")) args->kernel = spmv_original;
             else if (!strcmp(value,"v2")) args->kernel = spmv_v2;
             else if (!strcmp(value,"v2.2")) args->kernel = spmv_v22;
+            else if (!strcmp(value,"v2.2.1")) args->kernel = spmv_v221;
             else { program_options_free(args); return EINVAL; }
             num_arguments_consumed += used; continue;
         }
