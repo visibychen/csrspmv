@@ -28,7 +28,15 @@
 #include "vector.h"
 
 #include <errno.h>
+#include <limits.h>
+#ifdef _OPENMP
 #include <omp.h>
+#else
+#define omp_get_max_threads() 1
+#define omp_get_num_threads() 1
+#define omp_get_thread_num() 0
+#define omp_in_parallel() 0
+#endif
 
 #include <inttypes.h>
 #include <stdbool.h>
@@ -394,6 +402,28 @@ int main(int argc, char *argv[])
         }
     }
 
+    if(args.repeat<0||args.min_flops<0||(csr_matrix.num_nonzeros==0&&args.min_flops>0)){
+        fprintf(stderr,"%s: invalid repetition/flop target\n",program_invocation_short_name);
+        vector_free(&y);vector_free(&x);csr_matrix_int32_free(&csr_matrix);program_options_free(&args);return EXIT_FAILURE;
+    }
+    struct spmv_v3_plan v3plan;
+    struct timespec p0,p1;
+    if(args.kernel_v3){
+        int64_t calls=args.repeat;
+        if(csr_matrix.num_nonzeros>INT64_MAX/2)err=EOVERFLOW;
+        else if(csr_matrix.num_nonzeros){
+            int64_t per=2*csr_matrix.num_nonzeros,needed=args.min_flops/per+(args.min_flops%per!=0);
+            if(needed>calls)calls=needed;
+            if(calls>INT_MAX||calls>INT64_MAX/per)err=EOVERFLOW;
+        }
+        clock_gettime(CLOCK_MONOTONIC,&p0);
+        if(!err)err=spmv_v3_prepare(&v3plan,&csr_matrix,&x,&y,&args.v3);
+        clock_gettime(CLOCK_MONOTONIC,&p1);
+        if(err){fprintf(stderr,"%s: v3 prepare: %s\n",program_invocation_short_name,strerror(err));
+            vector_free(&y);vector_free(&x);csr_matrix_int32_free(&csr_matrix);program_options_free(&args);return EXIT_FAILURE;}
+        if(args.verbose)fprintf(stdout,"spmv_prepare: %.9f seconds requested=v3 selected=%s reason=direct-csr extra_bytes=0\nspmv_v3: backend=%s simd=%d partition=%s threads=%d\n",
+            timespec_duration(p0,p1),v3plan.supported?"v3":"original",spmv_v3_backend_name(v3plan.options.backend),v3plan.simd,v3plan.options.work?"work":"rows",v3plan.threads);
+    }
     if (args.verbose > 0) {
         fprintf(stdout, "csr_matrix_int32_spmv: ");
         fflush(stdout);
@@ -403,11 +433,22 @@ int main(int argc, char *argv[])
     /* 5. Compute the sparse matrix-vector multiplication. */
     int repeat = 0;
     int64_t num_flops = 0;
-#pragma omp parallel reduction(err_add:err) reduction(max:num_flops) reduction(max:repeat)
-    for (repeat = 0, num_flops = 0; (repeat < args.repeat) || (num_flops < args.min_flops); repeat++) {
-        err = csr_matrix_int32_spmv(&csr_matrix, &x, &y, &num_flops);
-        if (err)
-            break;
+    int actual_threads=1;
+    if(args.kernel_v3&&v3plan.supported&&v3plan.serial){
+        for(;repeat<args.repeat||num_flops<args.min_flops;repeat++){
+            err=spmv_v3_execute(&v3plan,&x,&y,&num_flops);if(err)break;
+        }
+    }else{
+#pragma omp parallel reduction(err_add:err) reduction(max:num_flops) reduction(max:repeat) reduction(max:actual_threads)
+        {
+#ifdef _OPENMP
+            actual_threads=omp_get_num_threads();
+#endif
+            for(repeat=0,num_flops=0;repeat<args.repeat||num_flops<args.min_flops;repeat++){
+                err=args.kernel_v3?spmv_v3_execute(&v3plan,&x,&y,&num_flops):csr_matrix_int32_spmv(&csr_matrix,&x,&y,&num_flops);
+                if(err)break;
+            }
+        }
     }
     if (err) {
         fprintf(stderr, "%s: %s\n", program_invocation_short_name,
@@ -427,6 +468,8 @@ int main(int argc, char *argv[])
                 (double) csr_matrix.num_nonzeros * 1e-9 * (double) repeat / (double) timespec_duration(t0, t1));
         fflush(stdout);
     }
+
+    if(args.verbose&&args.kernel_v3)fprintf(stdout,"spmv_team: actual_threads=%d\nspmv_cleanup: 0.000000000 seconds\n",actual_threads);
 
     /* 6. Write the destination vector to a file. */
     if (args.destination_vector_file) {

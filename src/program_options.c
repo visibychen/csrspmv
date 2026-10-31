@@ -51,6 +51,8 @@ static int program_options_init(
     args->source_vector_format = vector_value_f64;
     args->destination_vector_format_auto = true;
     args->destination_vector_format = vector_value_f64;
+    args->kernel_v3=0;
+    spmv_v3_defaults(&args->v3);
     args->repeat = 1;
     args->min_flops = 0;
     args->count_nonzeros = 0;
@@ -86,6 +88,10 @@ void program_options_print_help(
     fprintf(f, " Multiply a sparse matrix in CSR format with a vector\n");
     fprintf(f, "\n");
     fprintf(f, " Options are:\n");
+    fprintf(f, "  --kernel=original|v3\t\toriginal remains default\n");
+    fprintf(f, "  --v3-backend=NAME\t\tauto, tile8, pipeline4, csr\n");
+    fprintf(f, "  --v3-balance=NAME\t\twork (default), rows\n");
+    fprintf(f, "  --v3-serial-threshold=N\tdefault32768; 0 disables size rule\n");
     fprintf(f, "  --matrix-format=FORMAT\tchoose one of: binary, int32, int64,\n");
     fprintf(f, "  \t\t\t\tf32, f64 or complex32.\n");
     fprintf(f, "  --include-symmetric-part\tuse both lower and upper triangular parts of a symmetric matrix\n");
@@ -150,6 +156,24 @@ int parse_program_options(
         if (*argc <= 0)
             break;
 
+        const char *arg=(*argv)[0];
+        if(!strcmp(arg,"--kernel")||!strncmp(arg,"--kernel=",9)||!strncmp(arg,"--v3-",5)){
+            const char *eq=strchr(arg,'='),*value=eq?eq+1:(*argc>1?(*argv)[1]:NULL);size_t len=eq?(size_t)(eq-arg):strlen(arg);int valid=0;
+            if(value&&len==8&&!strncmp(arg,"--kernel",8)){
+                if(!strcmp(value,"original")){args->kernel_v3=0;valid=1;}
+                if(!strcmp(value,"v3")){args->kernel_v3=1;valid=1;}
+            }else if(value&&len==12&&!strncmp(arg,"--v3-backend",12)){
+                const char *names[]={"auto","tile8","pipeline4","csr"};
+                for(int k=0;k<4;k++)if(!strcmp(value,names[k])){args->v3.backend=k;valid=1;}
+            }else if(value&&len==12&&!strncmp(arg,"--v3-balance",12)){
+                if(!strcmp(value,"work")){args->v3.work=1;valid=1;}if(!strcmp(value,"rows")){args->v3.work=0;valid=1;}
+            }else if(value&&len==21&&!strncmp(arg,"--v3-serial-threshold",21)){
+                char *end;errno=0;long long v=strtoll(value,&end,10);
+                if(!errno&&*value&&!*end&&v>=0){args->v3.serial_threshold=v;valid=1;}
+            }
+            if(!valid){program_options_free(args);return EINVAL;}
+            num_arguments_consumed+=eq?1:2;continue;
+        }
         /* Parse matrix format. */
         if (strcmp((*argv)[0], "--matrix-format") == 0) {
             if (*argc < 2) {
