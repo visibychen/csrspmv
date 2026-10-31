@@ -60,6 +60,7 @@ struct program_options
     enum spmv_kernel kernel;
     struct spmv_v2_options v2;
     struct spmv_v22_options v22;
+    struct spmv_v222_options v222;
     int plan_memory_mib;
     int count_nonzeros;
     int verbose;

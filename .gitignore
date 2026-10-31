@@ -2,3 +2,5 @@
 /src/*.o
 /tests/test_spmv_v2
 /tests/test_spmv_v22
+
+/tests/test_spmv_v222

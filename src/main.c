@@ -405,7 +405,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
     int64_t expected_calls=args.repeat;
-    if(args.kernel==spmv_v22) {
+    if(args.kernel==spmv_v22||args.kernel==spmv_v222) {
         if(csr_matrix.num_nonzeros>INT64_MAX/2)err=EOVERFLOW;
         else if(csr_matrix.num_nonzeros) {
             int64_t per=2*csr_matrix.num_nonzeros;
@@ -419,7 +419,9 @@ int main(int argc, char *argv[])
     struct spmv_plan plan;
     struct timespec prepare_start, prepare_end;
     clock_gettime(CLOCK_MONOTONIC, &prepare_start);
-    if(args.kernel==spmv_v22)err=spmv_v22_prepare(&plan,&csr_matrix,&x,&y,&args.v2,&args.v22,expected_calls,
+    if(args.kernel==spmv_v222)err=spmv_v222_prepare(&plan,&csr_matrix,&x,&y,&args.v2,&args.v22,&args.v222,expected_calls,
+                            (size_t)args.plan_memory_mib*1048576);
+    else if(args.kernel==spmv_v22)err=spmv_v22_prepare(&plan,&csr_matrix,&x,&y,&args.v2,&args.v22,expected_calls,
                             (size_t)args.plan_memory_mib*1048576);
     else err = spmv_plan_prepare(&plan,&csr_matrix,&x,&y,args.kernel,&args.v2,(size_t)args.plan_memory_mib*1048576);
     clock_gettime(CLOCK_MONOTONIC, &prepare_end);
@@ -442,6 +444,7 @@ int main(int argc, char *argv[])
                 plan.v2.column_validation_s,plan.v2.policy_s);
         }
         if(plan.kernel==spmv_v22)spmv_v22_report(&plan,stdout);
+        if(args.kernel==spmv_v222)spmv_v222_report(&plan,stdout);
         fprintf(stdout, "csr_matrix_int32_spmv: ");
         fflush(stdout);
         clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -458,11 +461,11 @@ int main(int argc, char *argv[])
         if(calls<args.repeat) calls=args.repeat;
         if(calls>INT_MAX || calls>INT64_MAX/per) err=EOVERFLOW;
     }
-    int compute_threads=plan.kernel==spmv_v22?plan.v22.threads:omp_get_max_threads();
-    if(!err&&args.kernel==spmv_v22&&expected_calls==0) {
+    int compute_threads=(plan.kernel==spmv_v22||plan.kernel==spmv_v222)?plan.v22.threads:omp_get_max_threads();
+    if(!err&&(args.kernel==spmv_v22||args.kernel==spmv_v222)&&expected_calls==0) {
         /* No inspection or compute team is needed for zero calls. */
     } else if (!err && ((plan.kernel == spmv_v2 && plan.v2.serial)||
-                       (plan.kernel==spmv_v22&&compute_threads==1))) {
+                       ((plan.kernel==spmv_v22||plan.kernel==spmv_v222)&&compute_threads==1))) {
         for (; (repeat < args.repeat) || (num_flops < args.min_flops); repeat++) {
             err=spmv_plan_execute(&plan,&x,&y,&num_flops);
             if(err) break;
